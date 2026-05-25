@@ -69,7 +69,7 @@
   .modal-img{width:100%;max-height:340px;object-fit:cover;border-radius:3px;margin-bottom:1.5rem}
   .modal-title{font-family:'Playfair Display',serif;font-size:1.8rem;font-weight:900;line-height:1.2;color:var(--ink);margin-bottom:1rem;letter-spacing:-.02em}
   .modal-body{font-size:1rem;line-height:1.75;color:#2a2520;white-space:pre-wrap}
-  .modal-body.rtl{direction:rtl;font-family:serif}
+  .modal-body.rtl{direction: rtl;text-align: right;font-family: serif;unicode-bidi: embed;line-height: 2;}
   .sources-box{margin-top:1.5rem;padding:.75rem 1rem;background:var(--aged);border-left:3px solid var(--accent);font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:#4a4540}
   .modal-date{margin-top:1rem;font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--muted)}
   .ai-tag{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#14803c;letter-spacing:.06em;background:#eaf5ee;padding:2px 8px;border-radius:2px;border:1px solid #8fd4a8}
@@ -339,22 +339,57 @@ async function loadPosts() {
   } catch { return SAMPLE_POSTS; }
 }
 async function savePosts(p) {
-  try { await window.storage.set("satyapath:posts", JSON.stringify(p), true); } catch {}
+  try { await window.storage.set("satyapath:posts", JSON.stringify(p), true); } catch(err) {
+  console.error("Translation failed:", err);
+}
 }
 
-// ─── CLAUDE API ───
-async function translatePost(title, body, targetLang) {
-  const names = {hi:"Hindi",gu:"Gujarati",mr:"Marathi",ta:"Tamil",te:"Telugu",kn:"Kannada",ml:"Malayalam",bn:"Bengali",pa:"Punjabi",ur:"Urdu",or:"Odia"};
-  const langName = names[targetLang] || targetLang;
-  const prompt = `Translate the following political news article from English to ${langName}. Preserve the factual, journalistic tone. Return ONLY a JSON object with keys "title" and "body". No markdown, no extra text.\n\nTitle: ${title}\n\nBody: ${body}`;
-  const res = await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})
-  });
+// ─────────────────────────────────────────────
+// TRANSLATION ENGINE (FULLY REPAIRED)
+// ─────────────────────────────────────────────
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function translateText(text, lang) {
+
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${lang}&dt=t&q=${encodeURIComponent(text)}`;
+
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    throw new Error(`Translation request failed (${res.status})`);
+  }
+
   const data = await res.json();
-  const text = data.content.map(i=>i.text||"").join("");
-  return JSON.parse(text.replace(/```json|```/g,"").trim());
+
+  if (!data || !data[0]) {
+    throw new Error("Invalid translation response");
+  }
+
+  return data[0].map(item => item[0]).join("");
+}
+
+async function translatePost(title, body, targetLang) {
+
+  try {
+
+    const translatedTitle = await translateText(title, targetLang);
+
+    await delay(250);
+
+    const translatedBody = await translateText(body, targetLang);
+
+    return {
+      title: translatedTitle,
+      body: translatedBody
+    };
+
+  } catch(err) {
+    console.error("Translation engine error:", err);
+    throw err;
+  }
 }
 
 // ─── INIT ───
@@ -518,7 +553,11 @@ async function renderModalContent(post, lang) {
 }
 async function doTranslate(lang) {
   const btn = document.getElementById("trans-btn");
-  if(btn) { btn.disabled=true; btn.textContent="Translating…"; }
+  if(btn) {
+  btn.disabled = true;
+  btn.classList.add("loading");
+  btn.textContent = "Translating…";
+}
   try {
     const result = await translatePost(selectedPost.title, selectedPost.body, lang);
     if(!selectedPost.translations) selectedPost.translations={};
@@ -629,7 +668,9 @@ async function handlePublish() {
       try {
         const result = await translatePost(newPost.title, newPost.body, lang);
         newPost.translations[lang] = result;
-      } catch {}
+      } catch(err) {
+  console.error("Translation failed:", err);
+}
     }
     updateProgress(100, "Done!");
     setTimeout(()=>showProgress(false),1200);
